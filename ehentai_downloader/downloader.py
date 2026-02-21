@@ -121,7 +121,7 @@ class AsyncAlbumDownloader:
     async def _download_image(self, page: int, pic: int, total: int, url: str) -> None:
         if self._client is None:
             raise RuntimeError("Client not initialized")
-        response = await fetch_with_retry(self._client, url)
+        response = await fetch_with_retry(self._client, url, is_image=True)
         if response is None:
             self.failed_downloads.append(url)
             await self._log("Download failed", f"Could not download: {url}")

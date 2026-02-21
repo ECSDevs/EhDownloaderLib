@@ -1,4 +1,5 @@
 import asyncio
+import json
 from ehentai_downloader import download_album, download_albums
 
 
@@ -36,11 +37,8 @@ async def single_album_with_cookies_example():
         print(f"[{event}] {details}")
 
     # Example cookies - replace with your actual cookies
-    cookies = {
-        "ipb_member_id": "9344715",
-        "ipb_pass_hash": "ca2fe5bc1af6fd182fd4831f2d27094a",
-        "igneous": "kzujocikh8jbpc1p6",
-    }
+    with open("cookies.json", "r") as f:
+        cookies = json.load(f)
 
     print("\n=== Single Album Download with Cookies ===\n")
     result = await download_album(
@@ -87,6 +85,7 @@ async def batch_download_example():
 if __name__ == "__main__":
     print("EHentai Downloader - Async Example")
     print("=" * 40)
-    asyncio.run(single_album_example())
+    # asyncio.run(single_album_example())
     # Uncomment to test cookies
-    # asyncio.run(single_album_with_cookies_example())
+    asyncio.run(single_album_with_cookies_example())
+    # asyncio.run(batch_download_example())
