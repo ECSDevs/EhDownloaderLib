@@ -1,0 +1,16 @@
+[[source]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+verify_ssl = true
+name = "pip_conf_index_global"
+
+[packages]
+beautifulsoup4 = "==4.13.4"
+fake-useragent = "==1.1.3"
+requests = "==2.32.4"
+rich = "==14.1.0"
+
+[dev-packages]
+basedpyright = "*"
+
+[requires]
+python_version = "3.11"
