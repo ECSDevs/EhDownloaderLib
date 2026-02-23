@@ -1,3 +1,5 @@
 Downloads/
 **/__pycache__/
 cookies.json
+*.egg-info
+dist/

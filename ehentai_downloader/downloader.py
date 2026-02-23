@@ -1,176 +1,118 @@
 import asyncio
+import os
 import random
+import re
 from pathlib import Path
-from typing import Optional, Callable, Dict, List, Any, cast, Union
+from typing import Dict, List, Optional, Union, cast
+from urllib.parse import urlparse, parse_qs, urlencode
 
 import httpx
-from httpx import Cookies
-from bs4 import Tag
+from bs4 import BeautifulSoup, Tag
 
-from .client import create_client, fetch_with_retry
-from .crawler import (
-    fetch_page,
-    extract_album_name,
-    extract_album_pages,
-    extract_picture_pages,
-    get_reloaded_picture_page,
-    extract_image_url,
-)
-from .fileio import ensure_download_dir, get_filename_from_url
-from .config import CHUNK_SIZE
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+TIMEOUT = 30.0
+CHUNK_SIZE = 16 * 1024
 
 
-class AsyncAlbumDownloader:
+def santize_album_name(name: str) -> str:
+    invalid = r'[\\/:*?"<>|]' if os.name == "nt" else r"[/:]"
+    return re.sub(invalid, "_", name)
+
+
+class Downloader:
     def __init__(
         self,
-        url: str,
-        download_folder: Optional[str] = None,
         client: Optional[httpx.AsyncClient] = None,
-        cookies: Optional[Union[Dict[str, str], Cookies]] = None,
-        on_progress: Optional[Callable[[int, int, int], None]] = None,
-        on_log: Optional[Callable[[str, str], None]] = None,
+        cookies: Optional[Dict[str, str]] = None,
     ):
-        self.url = url
-        self.download_folder = download_folder
-        self.cookies = cookies
         self._client = client
+        self._cookies = cookies
         self._owns_client = client is None
-        self.on_progress = on_progress
-        self.on_log = on_log
-        self.album_name: str = ""
-        self.download_path: str = ""
-        self.failed_downloads: List[str] = []
 
-    async def _log(self, event: str, details: str) -> None:
-        if self.on_log:
-            if asyncio.iscoroutinefunction(self.on_log):
-                await self.on_log(event, details)
-            else:
-                self.on_log(event, details)
-
-    async def _progress(self, page: int, pic: int, total: int) -> None:
-        if self.on_progress:
-            if asyncio.iscoroutinefunction(self.on_progress):
-                await self.on_progress(page, pic, total)
-            else:
-                self.on_progress(page, pic, total)
-
-    async def __aenter__(self) -> "AsyncAlbumDownloader":
+    async def __aenter__(self) -> "Downloader":
         if self._owns_client:
-            self._client = create_client(cookies=self.cookies)
+            self._client = httpx.AsyncClient(
+                timeout=TIMEOUT, follow_redirects=True, cookies=self._cookies
+            )
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, *args) -> None:
         if self._owns_client and self._client:
             await self._client.aclose()
 
-    async def download(self) -> Dict[str, Any]:
-        if self._client is None:
-            raise RuntimeError(
-                "Client not initialized. Use async with context manager."
-            )
+    async def _get(self, url: str, retries: int = 5) -> httpx.Response:
+        for attempt in range(retries):
+            try:
+                r = await self._client.get(url, headers=HEADERS, timeout=TIMEOUT)
+                r.raise_for_status()
+                return r
+            except Exception:
+                if attempt == retries - 1:
+                    raise
+                await asyncio.sleep(2 ** (attempt + 1) + random.uniform(1, 2))
 
-        await self._log("Starting", f"Initializing download for: {self.url}")
+    async def _fetch_soup(self, url: str) -> BeautifulSoup:
+        r = await self._get(url)
+        return BeautifulSoup(r.text, "html.parser")
 
-        initial_soup = await fetch_page(self._client, self.url)
-        self.album_name = extract_album_name(self.url, initial_soup)
-        self.download_path = ensure_download_dir(self.album_name, self.download_folder)
+    async def album(self, url: str, target_folder: str) -> str:
+        soup = await self._fetch_soup(url)
+        title_el = soup.find("h1", {"id": "gn"})
+        album_name = title_el.get_text() if title_el else "unknown_album"
 
-        await self._log(
-            "Album Info", f"Name: {self.album_name}, Path: {self.download_path}"
-        )
+        Path(target_folder).mkdir(parents=True, exist_ok=True)
 
-        album_pages = [self.url] + extract_album_pages(self.url, initial_soup)
-        self.failed_downloads = []
-
-        for page_idx, page_url in enumerate(album_pages):
-            await self._log(
-                "Processing page", f"Page {page_idx + 1}/{len(album_pages)}"
-            )
-            page_soup = await fetch_page(self._client, page_url)
-            containers = cast(List[Tag], page_soup.find_all("a", {"href": True}))
-            picture_pages = extract_picture_pages(containers)
-            await self._process_pictures(page_idx + 1, picture_pages)
-            if page_idx < len(album_pages) - 1:
+        pages = [url] + self._extract_album_pages(url, soup)
+        for i, page_url in enumerate(pages):
+            page_soup = await self._fetch_soup(page_url) if i > 0 else soup
+            links = cast(List[Tag], page_soup.find_all("a", {"href": True}))
+            pic_pages = [
+                cast(str, a.get("href"))
+                for a in links
+                if "/s/" in cast(str, a.get("href", ""))
+            ]
+            for pic_url in pic_pages:
+                img_url = await self._resolve_image(pic_url)
+                await self._download_image(img_url, target_folder)
+                await asyncio.sleep(random.uniform(1.5, 4.0))
+            if i < len(pages) - 1:
                 await asyncio.sleep(random.uniform(1, 5))
 
-        result = {
-            "album_name": self.album_name,
-            "download_path": self.download_path,
-            "failed_downloads": self.failed_downloads,
-            "success": len(self.failed_downloads) == 0,
-        }
-        await self._log("Complete", f"Success: {result['success']}")
-        return result
+        return album_name
 
-    async def _process_pictures(self, page_num: int, picture_pages: List[str]) -> None:
-        if self._client is None:
-            raise RuntimeError("Client not initialized")
-        for pic_idx, pic_url in enumerate(picture_pages):
-            try:
-                reloaded_url = await get_reloaded_picture_page(self._client, pic_url)
-                image_url = await extract_image_url(self._client, reloaded_url)
-                await self._download_image(
-                    page_num, pic_idx + 1, len(picture_pages), image_url
-                )
-                await asyncio.sleep(random.uniform(1.5, 4.0))
-            except Exception as e:
-                await self._log("Error", f"Failed to download {pic_url}: {str(e)}")
-                self.failed_downloads.append(pic_url)
+    def _extract_album_pages(self, url: str, soup: BeautifulSoup) -> List[str]:
+        pattern = re.compile(f"^{re.escape(url)}\\?p=")
+        tags = soup.find_all("a", {"href": pattern, "onclick": "return false"})
+        if not tags or len(tags) < 2:
+            return []
+        last_url = cast(str, cast(Tag, tags[-2]).get("href"))
+        m = re.search(r"\?p=(\d+)", last_url)
+        last = int(m.group(1)) if m else 0
+        return [f"{url}?p={p}" for p in range(1, last)] + [last_url]
 
-    async def _download_image(self, page: int, pic: int, total: int, url: str) -> None:
-        if self._client is None:
-            raise RuntimeError("Client not initialized")
-        response = await fetch_with_retry(self._client, url, is_image=True)
-        if response is None:
-            self.failed_downloads.append(url)
-            await self._log("Download failed", f"Could not download: {url}")
-            return
+    async def _resolve_image(self, pic_page: str) -> str:
+        soup = await self._fetch_soup(pic_page)
+        nl = soup.find("a", {"id": "loadfail", "onclick": True})
+        if nl:
+            onclick = cast(str, cast(Tag, nl).get("onclick", ""))
+            m = re.search(r"nl\('([^']+)'\)", onclick)
+            if m:
+                parsed = urlparse(pic_page)
+                q = parse_qs(parsed.query)
+                q["nl"] = m.group(1)
+                pic_page = parsed._replace(query=urlencode(q, doseq=True)).geturl()
+                soup = await self._fetch_soup(pic_page)
 
-        filename = get_filename_from_url(url)
-        filepath = Path(self.download_path) / filename
+        img = soup.find("img", {"id": "img", "src": True})
+        if not img:
+            raise ValueError(f"No image found on: {pic_page}")
+        return cast(str, cast(Tag, img).get("src"))
 
+    async def _download_image(self, url: str, folder: str) -> None:
+        r = await self._get(url)
+        filename = url.split("/")[-1]
+        filepath = Path(folder) / filename
         with open(filepath, "wb") as f:
-            async for chunk in response.aiter_bytes(chunk_size=CHUNK_SIZE):
-                f.write(chunk)
-
-        await self._progress(page, pic, total)
-
-
-async def download_album(
-    url: str,
-    download_folder: Optional[str] = None,
-    cookies: Optional[Union[Dict[str, str], Cookies]] = None,
-    on_progress: Optional[Callable[[int, int, int], None]] = None,
-    on_log: Optional[Callable[[str, str], None]] = None,
-) -> Dict[str, Any]:
-    async with AsyncAlbumDownloader(
-        url,
-        download_folder=download_folder,
-        cookies=cookies,
-        on_progress=on_progress,
-        on_log=on_log,
-    ) as downloader:
-        return await downloader.download()
-
-
-async def download_albums(
-    urls: List[str],
-    download_folder: Optional[str] = None,
-    cookies: Optional[Union[Dict[str, str], Cookies]] = None,
-    on_progress: Optional[Callable[[int, int, int], None]] = None,
-    on_log: Optional[Callable[[str, str], None]] = None,
-) -> List[Dict[str, Any]]:
-    async with create_client(cookies=cookies) as client:
-        results = []
-        for url in urls:
-            async with AsyncAlbumDownloader(
-                url,
-                download_folder=download_folder,
-                client=client,
-                on_progress=on_progress,
-                on_log=on_log,
-            ) as downloader:
-                result = await downloader.download()
-                results.append(result)
-        return results
+            f.write(r.content)
