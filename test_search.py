@@ -1,5 +1,5 @@
 import asyncio
-from ehentai_downloader import Downloader
+from ehentaix import Downloader
 
 
 async def main():

@@ -1,6 +1,6 @@
 import asyncio
 from json import load
-from ehentai_downloader import Downloader
+from ehentaix import Downloader
 
 
 async def main():

@@ -3,13 +3,13 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ehentai-downloader"
+name = "ehentaix"
 version = "0.1.2"
-description = "A Python library for downloading E-Hentai albums"
+description = "A Python library for downloading and searching E-Hentai albums"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.8"
-authors = [{ name = "EHentaiDownloader Contributors" }]
+authors = [{ name = "originalFactor" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -24,8 +24,8 @@ classifiers = [
 dependencies = ["beautifulsoup4>=4.13.4", "httpx>=0.27.0", "pydantic>=2.0"]
 
 [project.urls]
-Homepage = "https://github.com/Lysagxra/EHentaiDownloader"
-Repository = "https://github.com/Lysagxra/EHentaiDownloader"
+Homepage = "https://github.com/originalFactor/EhDownloaderLib"
+Repository = "https://github.com/originalFactor/EhDownloaderLib"
 
 [tool.setuptools]
-packages = ["ehentai_downloader"]
+packages = ["ehentaix"]
