@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import os
 import random
@@ -9,7 +11,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 
 import httpx
 from bs4 import BeautifulSoup, Tag
-from pydantic import BaseModel
+from dataclasses import dataclass, field
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -18,18 +20,29 @@ TIMEOUT = 30.0
 CHUNK_SIZE = 16 * 1024
 
 
-class Gallery(BaseModel):
+@dataclass
+class Gallery:
     title: str
     published: datetime
     rate: float
     type: str
     tags: list[str]
     url: str
-    thumbnail_url: str
     id: int
+    _client: EHentaiClient = field(repr=False)
+    _thumb_url: str = field(repr=False)
+    _thumb_cache: bytes | None = field(default=None, repr=False, init=False)
+
+    async def thumbnail(self, retries: int = 5) -> bytes:
+        if self._thumb_cache is None:
+            self._thumb_cache = await self._client.fetch_thumbnail(
+                self._thumb_url, retries
+            )
+        return self._thumb_cache
 
 
-class SearchResult(BaseModel):
+@dataclass
+class SearchResult:
     galleries: list[Gallery]
     first: int
     last: int
@@ -51,25 +64,26 @@ def santize_album_name(name: str) -> str:
     return re.sub(invalid, "_", name)
 
 
-class Downloader:
+class EHentaiClient:
     def __init__(
         self,
         client: httpx.AsyncClient | None = None,
         cookies: dict[str, str] | None = None,
-        exhentai: bool = False,
     ):
         self._client = client or httpx.AsyncClient(
             cookies=cookies, follow_redirects=True, timeout=TIMEOUT
         )
         self._owns_client = client is None
-        self._base_url = "https://exhentai.org" if exhentai else "https://e-hentai.org"
 
-    async def __aenter__(self) -> "Downloader":
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
+    async def __aenter__(self) -> "EHentaiClient":
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        await self.aclose()
 
     async def _get(self, url: str, retries: int = 5) -> httpx.Response:
         attempt = 0
@@ -79,26 +93,41 @@ class Downloader:
                 r.raise_for_status()
                 return r
             except Exception:
+                attempt += 1
                 if attempt >= retries:
                     raise
-            await asyncio.sleep(2 ** (attempt + 1) + random.uniform(1, 2))
-            attempt += 1
+                await asyncio.sleep(2 ** (attempt + 1) + random.uniform(1, 2))
         raise RuntimeError("Retries must bigger than 0")
 
-    async def _fetch_soup(self, url: str) -> BeautifulSoup:
-        r = await self._get(url)
+    async def _fetch_soup(self, url: str, retries: int = 5) -> BeautifulSoup:
+        r = await self._get(url, retries)
         return BeautifulSoup(r.text, "html.parser")
 
-    async def search(self, query: str, next: int | None = None) -> SearchResult:
+    async def search(
+        self,
+        query: str,
+        next: int | None = None,
+        exhentai: bool = False,
+        retries: int = 5,
+    ) -> SearchResult:
         params = {"f_search": query}
         if next is not None:
             params["next"] = str(next)
-        url = self._base_url + "/?" + urlencode(params)
-        soup = await self._fetch_soup(url)
-        return self._parse_search_results(soup)
+        base = "https://exhentai.org" if exhentai else "https://e-hentai.org"
+        url = base + "/?" + urlencode(params)
+        soup = await self._fetch_soup(url, retries)
+        return await self._parse_search_results(soup, retries)
 
-    def _parse_search_results(self, soup: BeautifulSoup) -> SearchResult:
-        galleries: list[Gallery] = []
+    async def fetch_thumbnail(self, url: str, retries: int = 5) -> bytes:
+        if not url:
+            return b""
+        r = await self._get(url, retries)
+        return r.content
+
+    async def _parse_search_results(
+        self, soup: BeautifulSoup, retries: int = 5
+    ) -> SearchResult:
+        entries: list[tuple[dict[str, Any], str]] = []
         rows = soup.select("table.itg tr")[1:]  # skip header
         for row in rows:
             name_td = row.select_one("td.gl3c.glname")
@@ -135,24 +164,30 @@ class Downloader:
                 if thumb_td
                 else ""
             )
-            galleries.append(
-                Gallery(
-                    title=title_text,
-                    published=published,
-                    rate=rate,
-                    type=gallery_type,
-                    tags=tags,
-                    url=href,
-                    thumbnail_url=thumb_url,
-                    id=gid,
+            entries.append(
+                (
+                    dict(
+                        title=title_text,
+                        published=published,
+                        rate=rate,
+                        type=gallery_type,
+                        tags=tags,
+                        url=href,
+                        id=gid,
+                    ),
+                    thumb_url,
                 )
             )
+        galleries = [
+            Gallery(**data, _client=self, _thumb_url=thumb_url)
+            for data, thumb_url in entries
+        ]
         first = galleries[0].id if galleries else 0
         last = galleries[-1].id if galleries else 0
         return SearchResult(galleries=galleries, first=first, last=last)
 
-    async def album(self, url: str, target_folder: str) -> str:
-        soup = await self._fetch_soup(url)
+    async def album(self, url: str, target_folder: str, retries: int = 5) -> str:
+        soup = await self._fetch_soup(url, retries)
         title_el = soup.find("h1", {"id": "gn"})
         album_name = title_el.get_text() if title_el else "unknown_album"
 
@@ -160,7 +195,7 @@ class Downloader:
 
         pages = [url] + self._extract_album_pages(url, soup)
         for i, page_url in enumerate(pages):
-            page_soup = await self._fetch_soup(page_url) if i > 0 else soup
+            page_soup = await self._fetch_soup(page_url, retries) if i > 0 else soup
             links = cast(list[Tag], page_soup.find_all("a", {"href": True}))
             pic_pages = [
                 cast(str, a.get("href"))
@@ -168,8 +203,8 @@ class Downloader:
                 if "/s/" in cast(str, a.get("href", ""))
             ]
             for pic_url in pic_pages:
-                img_url = await self._resolve_image(pic_url)
-                await self._download_image(img_url, target_folder)
+                img_url = await self._resolve_image(pic_url, retries)
+                await self._download_image(img_url, target_folder, retries)
                 await asyncio.sleep(random.uniform(1.5, 4.0))
             if i < len(pages) - 1:
                 await asyncio.sleep(random.uniform(1, 5))
@@ -186,8 +221,8 @@ class Downloader:
         last = int(m.group(1)) if m else 0
         return [f"{url}?p={p}" for p in range(1, last)] + [last_url]
 
-    async def _resolve_image(self, pic_page: str) -> str:
-        soup = await self._fetch_soup(pic_page)
+    async def _resolve_image(self, pic_page: str, retries: int = 5) -> str:
+        soup = await self._fetch_soup(pic_page, retries)
         nl = soup.find("a", {"id": "loadfail", "onclick": True})
         if nl:
             onclick = cast(str, cast(Tag, nl).get("onclick", ""))
@@ -197,15 +232,15 @@ class Downloader:
                 q: dict[str, Any] = parse_qs(parsed.query)
                 q["nl"] = m.group(1)
                 pic_page = parsed._replace(query=urlencode(q, doseq=True)).geturl()
-                soup = await self._fetch_soup(pic_page)
+                soup = await self._fetch_soup(pic_page, retries)
 
         img = soup.find("img", {"id": "img", "src": True})
         if not img:
             raise ValueError(f"No image found on: {pic_page}")
         return cast(str, cast(Tag, img).get("src"))
 
-    async def _download_image(self, url: str, folder: str) -> None:
-        r = await self._get(url)
+    async def _download_image(self, url: str, folder: str, retries: int = 5) -> None:
+        r = await self._get(url, retries)
         filename = url.split("/")[-1]
         filepath = Path(folder) / filename
         with open(filepath, "wb") as f:

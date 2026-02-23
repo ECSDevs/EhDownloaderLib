@@ -1,9 +1,9 @@
 import asyncio
-from ehentaix import Downloader
+from ehentaix import EHentaiClient
 
 
 async def main():
-    async with Downloader() as d:
+    async with EHentaiClient() as d:
         result = await d.search(query="furry yaoi")
         print(f"共 {len(result.galleries)} 条结果")
         print(f"first={result.first}, last={result.last}\n")
@@ -11,7 +11,8 @@ async def main():
             print(f"[{g.type}] {g.title}")
             print(f"  id={g.id} rate={g.rate} published={g.published}")
             print(f"  url={g.url}")
-            print(f"  thumbnail={g.thumbnail_url}")
+            print(f"  thumbnail_url={g._thumb_url}")
+            print(f"  thumbnail={len(await g.thumbnail(1))} bytes")
             print(f"  tags={g.tags[:5]}...")
             print()
 

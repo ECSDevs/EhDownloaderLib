@@ -14,7 +14,7 @@ class Gallery(BaseModel):
     type: str # western, etc.
     tags: list[str]
     url: str
-    thumbnail_url: str
+    thumbnail: bytes
     id: int
 
 class SearchResult(BaseModel):
