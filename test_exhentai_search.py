@@ -1,0 +1,22 @@
+import asyncio
+from json import load
+from ehentai_downloader import Downloader
+
+
+async def main():
+    with open("cookies.json", "r") as f:
+        cookies = load(f)
+    async with Downloader(cookies=cookies, exhentai=True) as d:
+        result = await d.search(query="furry yaoi")
+        print(f"共 {len(result.galleries)} 条结果")
+        print(f"first={result.first}, last={result.last}\n")
+        for g in result.galleries[:3]:
+            print(f"[{g.type}] {g.title}")
+            print(f"  id={g.id} rate={g.rate} published={g.published}")
+            print(f"  url={g.url}")
+            print(f"  thumbnail={g.thumbnail_url}")
+            print(f"  tags={g.tags[:5]}...")
+            print()
+
+
+asyncio.run(main())

@@ -6,6 +6,7 @@ name = "pip_conf_index_global"
 [packages]
 beautifulsoup4 = "==4.13.4"
 httpx = "==0.27.0"
+pydantic = "*"
 
 [dev-packages]
 basedpyright = "*"
