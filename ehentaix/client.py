@@ -29,6 +29,7 @@ class Gallery:
     tags: list[str]
     url: str
     id: int
+    filecount: int
     _client: EHentaiClient = field(repr=False)
     _thumb_url: str = field(repr=False)
     _thumb_cache: bytes | None = field(default=None, repr=False, init=False)
@@ -141,6 +142,12 @@ class EHentaiClient:
             if not gid_m:
                 continue
             gid = int(gid_m.group(1))
+            pages_el = row.find("div", string=re.compile(r"^\d+\s+pages?$"))
+            if pages_el:
+                pages_m = re.search(r"\d+", pages_el.get_text(strip=True))
+                filecount = int(pages_m.group(0)) if pages_m else 0
+            else:
+                filecount = 0
             title = a.select_one("div.glink")
             title_text = title.get_text(strip=True) if title else ""
             tags = [
@@ -174,6 +181,7 @@ class EHentaiClient:
                         tags=tags,
                         url=href,
                         id=gid,
+                        filecount=filecount,
                     ),
                     thumb_url,
                 )
