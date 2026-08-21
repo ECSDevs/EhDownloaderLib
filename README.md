@@ -1,111 +1,116 @@
-# E-Hentai Downloader
+# ehentaix
 
-> A Python-based tool for downloading E-Hentai albums. This tool reads a list of URLs from a file and processes the downloads accordingly.
-
-![Demo](https://github.com/Lysagxra/EHentaiDownloader/blob/e6e408181db6bb6707c29135c7fd04b4859830d5/misc/Demo.gif)
+A small async Python library for searching E-Hentai/ExHentai galleries, fetching thumbnails, and downloading album images.
 
 ## Features
 
-- Downloads multiple files concurrently.
-- Supports [batch downloading](https://github.com/Lysagxra/EHentaiDownloader/tree/main?tab=readme-ov-file#batch-download) via a list of URLs.
-- Tracks download progress with a progress bar.
-- Automatically creates a directory structure for organized storage.
-
-## Dependencies
-
-- Python 3
-- `BeautifulSoup` (bs4) - for HTML parsing
-- `fake_useragent` - for generating fake user agents for web scraping
-- `requests` - for HTTP requests
-- `rich` - for progress display in the terminal
-
-## Directory Structure
-
-```
-project-root/
-├── src/
-│ ├── crawlers/
-│ │ ├── crawler.py           # Main crawler module used across the project
-│ │ └── crawler_utils.py     # Utilities for extracting media download links
-│ ├── downloaders/
-│ │ ├── album_downloader.py  # Manages the downloading of entire albums
-│ │ └── download_utils.py    # Utilities for managing the download process
-│ ├── managers/
-│ │ ├── live_manager.py      # Manages a real-time live display
-│ │ ├── log_manager.py       # Manages real-time log updates
-│ │ └── progress_manager.py  # Manages progress bars
-│ ├── config.py              # Manages constants and settings used across the project
-│ ├── file_utils.py          # Utilities for managing file operations
-│ └── general_utils.py       # Miscellaneous utility functions
-├── downloader.py            # Module for initiating downloads from specified EHentai URLs
-├── main.py                  # Main script to run the downloader
-├── URLs.txt                 # Text file listing album URLs to be downloaded
-└── session_log.txt          # Log file for recording session details
-```
+- Asynchronous `EHentaiClient` supporting `async with`.
+- Gallery search across E-Hentai and ExHentai with pagination (`next`).
+- Thumbnail fetching with caching per gallery.
+- Full album download to a target folder.
+- Bounded retries with exponential backoff.
+- Platform-aware album-name sanitization.
 
 ## Installation
 
-1. Clone the repository:
+Requires Python `>=3.8`. Install from this directory:
 
 ```bash
-git clone https://github.com/Lysagxra/EHentaiDownloader.git
+python -m pip install -e .
 ```
 
-2. Navigate to the project directory:
+The package depends on `beautifulsoup4`, `httpx`, and `pydantic` (>= 2.0).
+
+## Quick start
+
+### Search and fetch thumbnails
+
+```python
+import asyncio
+from ehentaix import EHentaiClient
+
+
+async def main() -> None:
+    async with EHentaiClient() as client:
+        result = await client.search("some query")
+        for gallery in result.galleries:
+            thumb: bytes = await gallery.thumbnail()
+            print(gallery.title, gallery.rate, len(thumb))
+
+
+asyncio.run(main())
+```
+
+Search results are paginated. Pass the returned `last` value back as `next` to load the following page, and set `exhentai=True` to search ExHentai (requires cookies).
+
+### Download an album
+
+```python
+import asyncio
+from ehentaix import EHentaiClient, santize_album_name
+
+
+async def main() -> None:
+    async with EHentaiClient() as client:
+        album_name = await client.album(
+            "https://e-hentai.org/g/123456/abcdef123456/", "target_folder"
+        )
+        print(santize_album_name(album_name))
+
+
+asyncio.run(main())
+```
+
+Images are written directly into the caller-provided target folder, and the parsed album name is returned.
+
+### ExHentai access
+
+Pass cookies to the client. The client must not be closed by the library if you supply your own `httpx.AsyncClient`; only internally created clients are closed by `aclose()`/context-manager exit.
+
+```python
+import asyncio
+import httpx
+from ehentaix import EHentaiClient
+
+cookies = {
+    "ipb_member_id": "123456",
+    "ipb_pass_hash": "abcdef123456",
+    "igneous": "abcdef123456",
+}
+
+
+async def main() -> None:
+    client = httpx.AsyncClient(cookies=cookies)
+    try:
+        async with EHentaiClient(client=client) as ehentai:
+            result = await ehentai.search("query", exhentai=True)
+    finally:
+        await client.aclose()
+
+
+asyncio.run(main())
+```
+
+## Public API
+
+Exported from `ehentaix/__init__.py`:
+
+- `EHentaiClient` — async client with `search()`, `fetch_thumbnail()`, and `album()`.
+- `Gallery` — a single search result with a cached `thumbnail()` method.
+- `SearchResult` — `galleries` plus `first`/`last` pagination indices.
+- `santize_album_name(name)` — returns a filesystem-safe album name.
+
+## Development
+
+Live network check scripts are provided:
 
 ```bash
-cd EHentaiDownloader
+python test_search.py
+python test_exhentai_search.py  # requires a local cookies.json
 ```
 
-3. Install the required dependencies:
+These scripts execute at import time and require network access; they are not isolated pytest unit tests.
 
-```bash
-pip install -r requirements.txt
-```
+## License
 
-## Single Album Download
-
-To download a single album from an URL, you can use `downloader.py`, running the script with a valid album URL.
-
-### Usage
-
-```bash
-python3 downloader.py <album_url>
-```
-
-### Example
-
-```
-python3 downloader.py https://e-hentai.org/g/3392858/1a77348e16/
-```
-
-## Batch Download
-
-To batch download from multiple album URLs, you can use the `main.py` script. This script reads URLs from a file named `URLs.txt` and downloads each one using the album downloader.
-
-### Usage
-
-1. Create a file named `URLs.txt` in the root of your project, listing each URL on a new line.
-
-- Example of `URLs.txt`:
-
-```
-https://e-hentai.org/g/2466603/ab9b9e04c9/
-https://e-hentai.org/g/2486673/e24cf9d5d8/
-https://e-hentai.org/g/2490534/e80e7c554c/
-```
-
-- Ensure that each URL is on its own line without any extra spaces.
-- You can add as many URLs as you need, following the same format.
-
-2. Run the batch download script:
-
-```
-python3 main.py
-```
-
-3. The downloaded files will be saved in the `Downloads` directory.
-
-## Logging
-
-The application logs any issues encountered during the download process in a file named `session_log.txt`. Check this file for any URLs that may have been blocked or had errors.
+[MIT](LICENSE)

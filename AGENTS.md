@@ -10,7 +10,7 @@
 - `test_exhentai_search.py`: live ExHentai search example requiring cookies.
 - `EXPECTED_API.md`, `SEARCH_EXPRECTED_API.md`, and `SEARCH_QUERY.md`: API and response-shape notes; read them before changing parsing behavior.
 
-The top-level `README.md` is stale and describes a different downloader project/layout. Prefer the current package code and the API notes when they disagree.
+`README.md` describes this package and is referenced by `pyproject.toml` as the package readme. Keep it in sync with the code; when it disagrees with `client.py`, the code wins and the README should be corrected.
 
 ## Environment and commands
 
@@ -45,6 +45,10 @@ The public API is exported from `ehentaix/__init__.py`: `EHentaiClient`, `Galler
 Search and album methods scrape live HTML from E-Hentai-compatible pages. Treat CSS selectors, URL/query formats, pagination, `nl` image fallback handling, retry behavior, and response parsing as external compatibility contracts. Preserve bounded retries and the existing backoff unless a change is intentional and tested against representative responses.
 
 Album downloads write image files directly into the caller-provided target folder and return the parsed album name. Filename handling must remain platform-aware and must not allow source titles or URLs to create invalid path names. Avoid logging or committing URLs containing authentication cookies.
+
+## Documentation maintenance
+
+Update this `AGENTS.md` and the package `README.md` automatically, in the same change that makes the code behave differently — do not wait to be asked. Whenever you change the public API, add or remove a feature, alter dependencies, or touch behavior described in `README.md` (installation, usage, examples) or in this file (layout, commands, boundaries), update the corresponding documentation to match and correct any statement the change makes inaccurate. `README.md` is user-facing and is also the readme shown on package registries; keep it accurate for consumers. The `*_API.md` notes are the contract for HTML parsing — update them too when parsing behavior changes.
 
 ## Conventions
 
